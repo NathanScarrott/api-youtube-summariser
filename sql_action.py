@@ -13,7 +13,8 @@ def create_table(connection):
     id INTEGER PRIMARY KEY,
     summary TEXT,
     videoId TEXT NOT NULL,
-    playlistId TEXT
+    playlistId TEXT,
+    transcript TEXT
     )
     """
     
@@ -34,11 +35,21 @@ def insert_summary(connection, summary:str, videoId:str, playlistId = None):
     except Exception as e:
         print(e)
 
+# Add Transcript to DB
+def insert_transcript(connection, transcript:str, videoId:str, playlistId = None):
+    query = "INSERT INTO summaries (transcript, videoId, playlistId) VALUES (?, ?, ?)"
+    try:
+        with connection:
+            connection.execute(query, (transcript, videoId, playlistId))
+        print(f"Video: {videoId} was added to your database!")
+    except Exception as e:
+        print(e)
+
 # Query the DB
 def fetch_summary(connection, condition: str = None) -> list[tuple]:
     query =  "SELECT * FROM summaries"
     if condition:
-        query += f"WHERE {condition}"
+        query += f" WHERE {condition}"
     
     try:
         with connection:
@@ -46,6 +57,17 @@ def fetch_summary(connection, condition: str = None) -> list[tuple]:
         return rows
     except Exception as e:
         print(e)
+
+def fetch_summary_by_video_id(connection, video_id: str):
+    query = "SELECT * FROM summaries WHERE videoId = ?"
+    try:
+        with connection:
+            rows = connection.execute(query, (video_id,)).fetchall()
+        return rows
+    except Exception as e:
+        print(e)
+        return []
+
 
 # Main Function Wrapper
 def main():
