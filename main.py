@@ -1,182 +1,223 @@
-import requests
-import json
 import os
+from typing import List, Dict, Any
+
+from fastapi import FastAPI
 from pydantic import BaseModel
-
-from fastapi import FastAPI, Request
-
 from youtube_transcript_api import YouTubeTranscriptApi
+import requests
 
-from pytube import Playlist
-
-from sql_action import get_connection, create_table, insert_summary, fetch_data, insert_transcript, fetch_data_by_video_id, insert_favourite, create_favourites_table
-
+from sql_action import (
+    get_connection, 
+    create_table, 
+    insert_summary, 
+    insert_transcript, 
+    fetch_data_by_video_id, 
+    insert_favourite, 
+    create_favourites_table
+)
 from llm import model_request
-
 from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI()
+app = FastAPI(title="YouTube Summarizer API", version="1.0.0")
 
-# Request model for POST endpoints
+# Request models
 class VideoRequest(BaseModel):
     video_id: str
 
-class Transcript(BaseModel):
-    transcript: str
 
-class Summary(BaseModel):
-    summary: str
-
-@app.get("/generate_transcript/{video_id}")
-def generate_transcript(video_id:str):
+@app.get("/transcript/{video_id}")
+def get_transcript(video_id: str) -> Dict[str, Any]:
+    """Get and store transcript for a single video."""
     try:
-        result = _get_transcript_from_video_id(video_id)
-        return {"transcript" : result}
+        transcript = _get_transcript_from_video_id(video_id)
+        return {"transcript": transcript}
     except Exception as e:
         return {"error": str(e)}
-    
-@app.get("/generate_transcripts/{playlist_id}")
-def generate_playlist_transcript(playlist_id:str):
-    playlist_ids = _get_video_ids_from_playlist(playlist_id)
-    transcripts = []
 
-    for video_id in playlist_ids:
-        try:
-            result = _get_transcript_from_video_id(video_id)
-            transcripts.append(result)
-        except Exception as e:
-            print(f"Error : {str(e)} for ID: {video_id}")
-    return {"transcripts": transcripts}
+
+@app.get("/transcripts/{playlist_id}")
+def get_playlist_transcripts(playlist_id: str) -> Dict[str, Any]:
+    """Get transcripts for all videos in a playlist."""
+    try:
+        video_ids = _get_video_ids_from_playlist(playlist_id)
+        transcripts = []
+
+        for video_id in video_ids:
+            try:
+                transcript = _get_transcript_from_video_id(video_id)
+                transcripts.append({"video_id": video_id, "transcript": transcript})
+            except Exception as e:
+                print(f"Error processing video {video_id}: {e}")
+                transcripts.append({"video_id": video_id, "error": str(e)})
+        
+        return {"transcripts": transcripts}
+    except Exception as e:
+        return {"error": str(e)}
+
 
 @app.get("/summary/{video_id}")
-def generate_video_summary(video_id:str):
+def get_summary(video_id: str) -> Dict[str, Any]:
+    """Generate summary for a video from stored transcript."""
     try:
         summary = _generate_video_summary(video_id)
         return {"summary": summary}
     except Exception as e:
-        return {"Error": e}
-    
+        return {"error": str(e)}
+
+
 @app.get("/summaries/{playlist_id}")
-def generate_playlist_summaries(playlist_id:str):
+def get_playlist_summaries(playlist_id: str) -> Dict[str, Any]:
+    """Generate summaries for all videos in a playlist."""
     try:
         summaries = []
         video_ids = _get_video_ids_from_playlist(playlist_id)
+        
         for video_id in video_ids:
-            summary = _generate_video_summary(video_id)
+            try:
+                summary = _generate_video_summary(video_id)
+                summaries.append({"video_id": video_id, "summary": summary})
 
-            summaries.append(summary)
-
-            connection = get_connection(db_name="summaries.db")
-            create_table(connection=connection)
-            insert_summary(connection, summary, video_id)
+                # Store summary in database
+                connection = get_connection("summaries.db")
+                create_table(connection)
+                insert_summary(connection, summary, video_id, playlist_id)
+                connection.close()
+                
+            except Exception as e:
+                print(f"Error processing video {video_id}: {e}")
+                summaries.append({"video_id": video_id, "error": str(e)})
 
         return {"summaries": summaries}
     except Exception as e:
-        return {"Error": e}
-    
+        return {"error": str(e)}
+
+
 @app.get("/retrieve-summary/{video_id}")
-def retrieve_summary(video_id:str):
-    connection = get_connection(db_name="summaries.db")
-    create_table(connection=connection)
-    rows = fetch_data_by_video_id(video_id)
+def retrieve_stored_summary(video_id: str) -> Dict[str, Any]:
+    """Retrieve a previously stored summary."""
+    try:
+        connection = get_connection("summaries.db")
+        create_table(connection)
+        rows = fetch_data_by_video_id(connection, video_id)
+        connection.close()
 
-    if not rows:
-        return {"error": "No transcript found for this video"}
-    
-    summary = rows[0][1]
+        if not rows:
+            return {"error": "No summary found for this video"}
+        
+        summary = rows[0][1]  # summary column
+        return {"summary": summary}
+    except Exception as e:
+        return {"error": str(e)}
 
-    return summary
 
 @app.get("/retrieve-transcript/{video_id}")
-def retrieve_summary(video_id:str):
-    connection = get_connection(db_name="summaries.db")
-    create_table(connection=connection)
-    rows = fetch_data_by_video_id(video_id)
-
-    if not rows:
-        return {"error": "No transcript found for this video"}
-    
-    transcript = rows[0][4]
-
-    return transcript
-    
-@app.post("/favourites")
-def add_to_favourites(request: VideoRequest):
+def retrieve_stored_transcript(video_id: str) -> Dict[str, Any]:
+    """Retrieve a previously stored transcript."""
     try:
-        connection = get_connection(db_name="summaries.db")
-        create_table(connection=connection)
+        connection = get_connection("summaries.db")
+        create_table(connection)
+        rows = fetch_data_by_video_id(connection, video_id)
+        connection.close()
+
+        if not rows:
+            return {"error": "No transcript found for this video"}
+        
+        transcript = rows[0][4]  # transcript column
+        return {"transcript": transcript}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/favourites")
+def add_to_favourites(request: VideoRequest) -> Dict[str, str]:
+    """Add a video to favourites."""
+    try:
+        connection = get_connection("summaries.db")
+        create_table(connection)
         rows = fetch_data_by_video_id(connection, request.video_id)
+        connection.close()
 
         if not rows:
             return {"error": f"No summary found for video {request.video_id}"}
 
-        video_id = rows[0][2]  # videoId is at index 2
-        summary = rows[0][1]   # summary is at index 1
+        video_id = rows[0][2]  # videoId column
+        summary = rows[0][1]   # summary column
 
-        # Create favourites table and insert
-        favourites_connection = get_connection(db_name="favourites.db")
+        # Store in favourites
+        favourites_connection = get_connection("favourites.db")
         create_favourites_table(favourites_connection)
         insert_favourite(favourites_connection, video_id, summary)
+        favourites_connection.close()
 
         return {"message": f"Video {video_id} added to favourites"}
     except Exception as e:
         return {"error": str(e)}
 
 
-def _generate_video_summary(video_id):
-    connection = get_connection(db_name="summaries.db")
-    create_table(connection=connection)
-
+# Helper functions
+def _generate_video_summary(video_id: str) -> str:
+    """Generate a summary from stored transcript."""
+    connection = get_connection("summaries.db")
+    create_table(connection)
     rows = fetch_data_by_video_id(connection, video_id)
+    connection.close()
     
     if not rows:
-        return {"error": "No transcript found for this video"}
+        raise Exception(f"No transcript found for video {video_id}")
     
-    transcript = rows[0][4]
+    transcript = rows[0][4]  # transcript column
 
     prompt = f"""
-    Analayze the following transcript from a youtube video and generate a summary:
+    Analyze the following transcript from a YouTube video and generate a summary:
 
     <transcript>
     {transcript}
     </transcript>
 
-    Proceed with the summary wihout any leading phrases such as "Here is a summary of ...".
+    Proceed with the summary without any leading phrases such as "Here is a summary of ...".
     """
 
-    summary = model_request(prompt)
-    return summary
+    return model_request(prompt)
 
-def _get_video_ids_from_playlist(playlist_id:str):
+
+def _get_video_ids_from_playlist(playlist_id: str) -> List[str]:
+    """Get all video IDs from a YouTube playlist."""
     api_key = os.getenv("API_KEY")
+    if not api_key:
+        raise Exception("YouTube API key not found in environment variables")
     
-    list_url = f"https://www.googleapis.com/youtube/v3/playlistItems?part=contentDetails&playlistId={playlist_id}&maxResults=50&key={api_key}"
-    response = requests.get(list_url)
-
-    response_json = response.json()
-
-    ids = [item["contentDetails"]["videoId"] for item in response_json["items"]]
-
-    if response.status_code == 200:
-        return ids
-    else:
-        return {"error": f"Failed to fetch playlist: {response.status_code}", "details": response.json()}
+    url = f"https://www.googleapis.com/youtube/v3/playlistItems"
+    params = {
+        "part": "contentDetails",
+        "playlistId": playlist_id,
+        "maxResults": 50,
+        "key": api_key
+    }
     
-def _get_transcript_from_video_id(video_id: str):
+    response = requests.get(url, params=params)
+    
+    if response.status_code != 200:
+        raise Exception(f"Failed to fetch playlist: {response.status_code}")
+    
+    response_data = response.json()
+    return [item["contentDetails"]["videoId"] for item in response_data["items"]]
+
+
+def _get_transcript_from_video_id(video_id: str) -> str:
+    """Get transcript for a video and store it in database."""
     transcript_raw = YouTubeTranscriptApi.get_transcript(video_id)
-
     transcript_list = [transcript["text"] for transcript in transcript_raw]
     result = " ".join(transcript_list)
 
-    connection = get_connection(db_name="summaries.db")
-    create_table(connection=connection)
-    insert_transcript(connection, transcript=result, videoId=video_id, playlistId = None)
+    # Store transcript in database
+    connection = get_connection("summaries.db")
+    create_table(connection)
+    insert_transcript(connection, result, video_id, None)
+    connection.close()
 
     return result
-
-
     
 
 
