@@ -35,6 +35,31 @@ def insert_summary(connection, summary:str, videoId:str, playlistId = None):
     except Exception as e:
         print(e)
 
+def create_favourites_table(connection):
+    query = """
+    CREATE TABLE IF NOT EXISTS favourites (
+    id INTEGER PRIMARY KEY,
+    videoId TEXT NOT NULL,
+    summary TEXT
+    )
+    """
+    
+    try:
+        with connection:
+            connection.execute(query)
+        print("Favourites table was created!")
+    except Exception as e:
+        print(f"Error: {e}")
+
+def insert_favourite(connection, videoId:str, summary:str):
+    query = "INSERT INTO favourites (videoId, summary) VALUES (?, ?)"
+    try:
+        with connection:
+            connection.execute(query, (videoId, summary))
+        print(f"Video: {videoId} has been added to your favourites")
+    except Exception as e:
+        print(e)
+
 # Add Transcript to DB
 def insert_transcript(connection, transcript:str, videoId:str, playlistId = None):
     query = "INSERT INTO summaries (transcript, videoId, playlistId) VALUES (?, ?, ?)"
@@ -46,7 +71,7 @@ def insert_transcript(connection, transcript:str, videoId:str, playlistId = None
         print(e)
 
 # Query the DB
-def fetch_summary(connection, condition: str = None) -> list[tuple]:
+def fetch_data(connection, condition: str = None) -> list[tuple]:
     query =  "SELECT * FROM summaries"
     if condition:
         query += f" WHERE {condition}"
@@ -58,7 +83,7 @@ def fetch_summary(connection, condition: str = None) -> list[tuple]:
     except Exception as e:
         print(e)
 
-def fetch_summary_by_video_id(connection, video_id: str):
+def fetch_data_by_video_id(connection, video_id: str):
     query = "SELECT * FROM summaries WHERE videoId = ?"
     try:
         with connection:
@@ -76,6 +101,7 @@ def main():
     try:
         # Create a Table in the DB
         create_table(connection)
+        create_favourites_table(connection) # Added this line
         while True:
             start = input("Enter Option (Add, Search, Cmd+C to Quit): ").lower()
             if start == "add":
@@ -86,7 +112,7 @@ def main():
 
             elif start == "search":
                 print("All summaries:")
-                for user in fetch_summary(connection):
+                for user in fetch_data(connection):
                     print(user)
         
     finally:

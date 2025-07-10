@@ -1,6 +1,7 @@
 import requests
 import json
 import os
+from pydantic import BaseModel
 
 from fastapi import FastAPI, Request
 
@@ -8,7 +9,7 @@ from youtube_transcript_api import YouTubeTranscriptApi
 
 from pytube import Playlist
 
-from sql_action import get_connection, create_table, insert_summary, fetch_summary, insert_transcript, fetch_summary_by_video_id
+from sql_action import get_connection, create_table, insert_summary, fetch_data, insert_transcript, fetch_data_by_video_id, insert_favourite, create_favourites_table
 
 from llm import model_request
 
@@ -18,16 +19,26 @@ load_dotenv()
 
 app = FastAPI()
 
-@app.get("/transcript/{video_id}")
-def get_video_transcript(video_id:str):
+# Request model for POST endpoints
+class VideoRequest(BaseModel):
+    video_id: str
+
+class Transcript(BaseModel):
+    transcript: str
+
+class Summary(BaseModel):
+    summary: str
+
+@app.get("/generate_transcript/{video_id}")
+def generate_transcript(video_id:str):
     try:
         result = _get_transcript_from_video_id(video_id)
         return {"transcript" : result}
     except Exception as e:
         return {"error": str(e)}
     
-@app.get("/transcripts/{playlist_id}")
-def get_playlist_transcript(playlist_id:str):
+@app.get("/generate_transcripts/{playlist_id}")
+def generate_playlist_transcript(playlist_id:str):
     playlist_ids = _get_video_ids_from_playlist(playlist_id)
     transcripts = []
 
@@ -64,12 +75,61 @@ def generate_playlist_summaries(playlist_id:str):
         return {"summaries": summaries}
     except Exception as e:
         return {"Error": e}
+    
+@app.get("/retrieve-summary/{video_id}")
+def retrieve_summary(video_id:str):
+    connection = get_connection(db_name="summaries.db")
+    create_table(connection=connection)
+    rows = fetch_data_by_video_id(video_id)
+
+    if not rows:
+        return {"error": "No transcript found for this video"}
+    
+    summary = rows[0][1]
+
+    return summary
+
+@app.get("/retrieve-transcript/{video_id}")
+def retrieve_summary(video_id:str):
+    connection = get_connection(db_name="summaries.db")
+    create_table(connection=connection)
+    rows = fetch_data_by_video_id(video_id)
+
+    if not rows:
+        return {"error": "No transcript found for this video"}
+    
+    transcript = rows[0][4]
+
+    return transcript
+    
+@app.post("/favourites")
+def add_to_favourites(request: VideoRequest):
+    try:
+        connection = get_connection(db_name="summaries.db")
+        create_table(connection=connection)
+        rows = fetch_data_by_video_id(connection, request.video_id)
+
+        if not rows:
+            return {"error": f"No summary found for video {request.video_id}"}
+
+        video_id = rows[0][2]  # videoId is at index 2
+        summary = rows[0][1]   # summary is at index 1
+
+        # Create favourites table and insert
+        favourites_connection = get_connection(db_name="favourites.db")
+        create_favourites_table(favourites_connection)
+        insert_favourite(favourites_connection, video_id, summary)
+
+        return {"message": f"Video {video_id} added to favourites"}
+    except Exception as e:
+        return {"error": str(e)}
+
 
 def _generate_video_summary(video_id):
     connection = get_connection(db_name="summaries.db")
     create_table(connection=connection)
 
-    rows = fetch_summary_by_video_id(connection, video_id)
+    rows = fetch_data_by_video_id(connection, video_id)
     
     if not rows:
         return {"error": "No transcript found for this video"}
@@ -115,7 +175,10 @@ def _get_transcript_from_video_id(video_id: str):
     insert_transcript(connection, transcript=result, videoId=video_id, playlistId = None)
 
     return result
+
+
     
+
 
 
                         
